@@ -1,4 +1,5 @@
 use proc_macro::TokenStream;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use serde::Deserialize; // This needs 'features = ["derive"]' in Cargo.toml
 use std::{env, fs, path::PathBuf};
@@ -8,12 +9,11 @@ use syn::{Ident, LitStr, parse_macro_input};
 // These are NOT 'pub' so they don't violate proc-macro rules.
 #[derive(Deserialize, Debug)]
 struct AnchorIdl {
-    #[serde(default)]
-    _address: String,
+    address: String,
     #[serde(default)]
     accounts: Vec<IdlAccount>,
     #[serde(default)]
-    instructions: Vec<IdlInstruction>, // Added this line
+    instructions: Vec<IdlInstruction>,
     #[serde(default)]
     types: Vec<IdlDefinedType>,
 }
@@ -22,7 +22,37 @@ struct AnchorIdl {
 struct IdlInstruction {
     name: String,
     #[serde(default)]
-    args: Vec<IdlField>, // Added this line to capture instruction arguments
+    discriminator: Vec<u8>,
+    #[serde(default)]
+    accounts: Vec<IdlInstructionAccountItem>,
+    #[serde(default)]
+    args: Vec<IdlField>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+enum IdlInstructionAccountItem {
+    Account(IdlInstructionAccount),
+    Group(IdlInstructionAccountsGroup),
+}
+
+#[derive(Deserialize, Debug)]
+struct IdlInstructionAccountsGroup {
+    #[serde(default)]
+    _name: String,
+    #[serde(default)]
+    accounts: Vec<IdlInstructionAccountItem>,
+}
+
+#[derive(Deserialize, Debug)]
+struct IdlInstructionAccount {
+    name: String,
+    #[serde(default)]
+    writable: bool,
+    #[serde(default)]
+    signer: bool,
+    #[serde(default)]
+    address: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -53,6 +83,78 @@ struct IdlField {
     ty: String,
 }
 
+fn pascal_case_ident(name: &str) -> Ident {
+    let mut chars = name.chars();
+    let name_str = match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    };
+
+    Ident::new(&name_str, Span::call_site())
+}
+
+fn idl_field_type_tokens(ty: &str) -> TokenStream2 {
+    match ty {
+        "u64" => quote! { u64 },
+        "i64" => quote! { i64 },
+        "string" => quote! { String },
+        "bool" => quote! { bool },
+        "publicKey" => quote! { bevy_solana_core::WrappedPubkey },
+        _ => quote! { u64 },
+    }
+}
+
+fn idl_instruction_arg_type_tokens(ty: &str) -> TokenStream2 {
+    match ty {
+        "u64" => quote! { u64 },
+        "i64" => quote! { i64 },
+        "string" => quote! { String },
+        "bool" => quote! { bool },
+        "publicKey" => quote! { solana_sdk::pubkey::Pubkey },
+        _ => quote! { u64 },
+    }
+}
+
+fn idl_arg_serializer_tokens(field_name: &Ident, ty: &str) -> TokenStream2 {
+    match ty {
+        "u64" => quote! {
+            data.extend_from_slice(&#field_name.to_le_bytes());
+        },
+        "i64" => quote! {
+            data.extend_from_slice(&#field_name.to_le_bytes());
+        },
+        "string" => quote! {
+            let bytes = #field_name.as_bytes();
+            let len = u32::try_from(bytes.len()).expect("string argument too large for Anchor serialization");
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(bytes);
+        },
+        "bool" => quote! {
+            data.push(u8::from(#field_name));
+        },
+        "publicKey" => quote! {
+            data.extend_from_slice(&#field_name.to_bytes());
+        },
+        _ => quote! {
+            compile_error!("Unsupported IDL argument type for generated instruction builder");
+        },
+    }
+}
+
+fn flatten_instruction_accounts<'a>(
+    items: &'a [IdlInstructionAccountItem],
+    flattened: &mut Vec<&'a IdlInstructionAccount>,
+) {
+    for item in items {
+        match item {
+            IdlInstructionAccountItem::Account(account) => flattened.push(account),
+            IdlInstructionAccountItem::Group(group) => {
+                flatten_instruction_accounts(&group.accounts, flattened);
+            }
+        }
+    }
+}
+
 // --- THE ACTUAL MACRO ---
 #[proc_macro]
 pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
@@ -68,11 +170,12 @@ pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
 
     let idl: AnchorIdl = serde_json::from_str(&idl_content)
         .expect("ERROR: Failed to parse IDL JSON. Ensure it matches Anchor 0.31 format.");
+    let program_address = LitStr::new(&idl.address, Span::call_site());
 
     let mut generated_code = quote! {};
 
     for account in &idl.accounts {
-        let name = Ident::new(&account.name, proc_macro2::Span::call_site());
+        let name = Ident::new(&account.name, Span::call_site());
 
         // 1. Find the type definition that matches the account name
         // Anchor 0.31 separates 'accounts' from the actual 'type' definitions
@@ -84,16 +187,8 @@ pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
                 .fields
                 .iter()
                 .map(|f| {
-                    let field_name = Ident::new(&f.name, proc_macro2::Span::call_site());
-
-                    let field_type = match f.ty.as_str() {
-                        "u64" => quote! { u64 },
-                        "i64" => quote! { i64 },
-                        "string" => quote! { String },
-                        "bool" => quote! { bool },
-                        "publicKey" => quote! { bevy_solana_core::WrappedPubkey },
-                        _ => quote! { u64 },
-                    };
+                    let field_name = Ident::new(&f.name, Span::call_site());
+                    let field_type = idl_field_type_tokens(&f.ty);
 
                     quote! { pub #field_name: #field_type }
                 })
@@ -110,33 +205,79 @@ pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
         }
     }
 
-    // --- Step 5: Generate Instruction Structs with Fields ---
+    // --- Generate instruction structs and builder functions ---
     for instr in &idl.instructions {
-        let mut chars = instr.name.chars();
-        let name_str = match chars.next() {
-            None => String::new(),
-            Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
-        };
-        let name = Ident::new(&name_str, proc_macro2::Span::call_site());
+        let name = pascal_case_ident(&instr.name);
+        let builder_name = Ident::new(&instr.name, Span::call_site());
 
-        // Map the IDL types to Rust types for each argument
         let fields: Vec<_> = instr
             .args
             .iter()
             .map(|arg| {
-                let field_name = Ident::new(&arg.name, proc_macro2::Span::call_site());
-
-                // Re-using your existing type-mapping logic
-                let field_type = match arg.ty.as_str() {
-                    "u64" => quote! { u64 },
-                    "i64" => quote! { i64 },
-                    "string" => quote! { String },
-                    "bool" => quote! { bool },
-                    "publicKey" => quote! { bevy_solana_core::WrappedPubkey },
-                    _ => quote! { u64 }, // Default fallback
-                };
+                let field_name = Ident::new(&arg.name, Span::call_site());
+                let field_type = idl_field_type_tokens(&arg.ty);
 
                 quote! { pub #field_name: #field_type }
+            })
+            .collect();
+
+        let function_args: Vec<_> = instr
+            .args
+            .iter()
+            .map(|arg| {
+                let arg_name = Ident::new(&arg.name, Span::call_site());
+                let arg_type = idl_instruction_arg_type_tokens(&arg.ty);
+
+                quote! { #arg_name: #arg_type }
+            })
+            .collect();
+
+        let mut flattened_accounts = Vec::new();
+        flatten_instruction_accounts(&instr.accounts, &mut flattened_accounts);
+
+        let account_params: Vec<_> = flattened_accounts
+            .iter()
+            .filter(|account| account.address.is_none())
+            .map(|account| {
+                let account_name = Ident::new(&account.name, Span::call_site());
+
+                quote! { #account_name: solana_sdk::pubkey::Pubkey }
+            })
+            .collect();
+
+        let account_metas: Vec<_> = flattened_accounts
+            .iter()
+            .map(|account| {
+                let constructor = if account.writable {
+                    quote! { solana_sdk::instruction::AccountMeta::new }
+                } else {
+                    quote! { solana_sdk::instruction::AccountMeta::new_readonly }
+                };
+                let signer = account.signer;
+
+                if let Some(address) = &account.address {
+                    let address_lit = LitStr::new(address, Span::call_site());
+
+                    quote! {
+                        #constructor(solana_sdk::pubkey!(#address_lit), #signer)
+                    }
+                } else {
+                    let account_name = Ident::new(&account.name, Span::call_site());
+
+                    quote! {
+                        #constructor(#account_name, #signer)
+                    }
+                }
+            })
+            .collect();
+
+        let discriminator = &instr.discriminator;
+        let arg_serializers: Vec<_> = instr
+            .args
+            .iter()
+            .map(|arg| {
+                let arg_name = Ident::new(&arg.name, Span::call_site());
+                idl_arg_serializer_tokens(&arg_name, &arg.ty)
             })
             .collect();
 
@@ -144,6 +285,21 @@ pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
             #[derive(bevy::prelude::Component, Debug, Clone, Default)]
             pub struct #name {
                 #( #fields, )*
+            }
+
+            pub fn #builder_name(
+                #( #account_params, )*
+                #( #function_args ),*
+            ) -> solana_sdk::instruction::Instruction {
+                let mut data = Vec::with_capacity(8);
+                data.extend_from_slice(&[#( #discriminator ),*]);
+                #( #arg_serializers )*
+
+                solana_sdk::instruction::Instruction {
+                    program_id: solana_sdk::pubkey!(#program_address),
+                    accounts: vec![#( #account_metas ),*],
+                    data,
+                }
             }
         };
         generated_code.extend(instr_gen);

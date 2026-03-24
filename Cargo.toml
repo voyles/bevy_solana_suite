@@ -8,6 +8,12 @@ members = [
     "anchor_test_program/programs/anchor_test_program",
 ]
 
+[workspace.dependencies]
+bevy = "0.18.1"
+solana-sdk = "4.0.1"
+solana-client = "3.1.11"
+sha2 = "0.10"
+
 [profile.release]
 overflow-checks = true
 
