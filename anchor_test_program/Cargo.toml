@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "programs/anchor_test_program"
+]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true

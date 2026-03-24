@@ -1,0 +1,12 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Solana / IDL
+**/target/idl/*.json
+test-ledger/
+
+# Secrets (IMPORTANT)
+**/*.json
+!**/anchor_test_program/**/*.json

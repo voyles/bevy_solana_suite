@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "bevy_solana_gen",
+    "bevy_solana_core",
+    "bevy_game",
+    "anchor_test_program/programs/anchor_test_program",
+]
+
+[profile.release]
+overflow-checks = true
+
+[profile.dev]
+overflow-checks = true
