@@ -2,7 +2,7 @@
 
 A high-performance Rust workspace integrating the **Bevy Game Engine (v0.15)** with the **Solana Blockchain (Agave/SDK v4.0)**. 
 
-This suite allows for real-time blockchain state synchronization and transaction signing directly from within a Bevy ECS (Entity Component System) environment.
+This suite enables real-time blockchain state synchronization and transaction signing directly within a Bevy ECS (Entity Component System) environment.
 
 ## 🏗 Project Architecture
 
@@ -46,6 +46,10 @@ cargo run -p bevy_game
 
 &nbsp;&nbsp;[x] Filesystem-based Developer Wallet loading.
 
-&nbsp;&nbsp;[ ] Instruction Discriminator helper (Next: Wednesday).
+&nbsp;&nbsp;[x] Instruction Discriminator helper.
 
-&nbsp;&nbsp;[ ] First Initialize transaction execution (Next: Wednesday).
+&nbsp;&nbsp;[x] First Initialize transaction execution.
+
+&nbsp;&nbsp;[&nbsp;] Rich IDL Type Support (Next: Vectors, Options, and Eums)
+
+&nbsp;&nbsp;[&nbsp;] Account Deserializers (Next: Map on-chain state to Bevy Components)
