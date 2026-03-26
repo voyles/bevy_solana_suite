@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::quote;
+use quote::{format_ident, quote};
 use serde::Deserialize; // This needs 'features = ["derive"]' in Cargo.toml
 use std::{env, fs, path::PathBuf};
 use syn::{Ident, LitStr, parse_macro_input};
@@ -51,6 +51,7 @@ struct IdlInstructionAccount {
     writable: bool,
     #[serde(default)]
     signer: bool,
+    #[allow(dead_code)]
     #[serde(default)]
     address: Option<String>,
 }
@@ -209,25 +210,27 @@ pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
     for instr in &idl.instructions {
         let name = pascal_case_ident(&instr.name);
         let builder_name = Ident::new(&instr.name, Span::call_site());
+        // Phase 2: Create a name for the Accounts Struct
+        let accounts_struct_name = format_ident!("{}Accounts", name);
 
+        // Existing Arg Fields
         let fields: Vec<_> = instr
             .args
             .iter()
             .map(|arg| {
                 let field_name = Ident::new(&arg.name, Span::call_site());
                 let field_type = idl_field_type_tokens(&arg.ty);
-
                 quote! { pub #field_name: #field_type }
             })
             .collect();
 
+        // Function arguments for the builder
         let function_args: Vec<_> = instr
             .args
             .iter()
             .map(|arg| {
                 let arg_name = Ident::new(&arg.name, Span::call_site());
                 let arg_type = idl_instruction_arg_type_tokens(&arg.ty);
-
                 quote! { #arg_name: #arg_type }
             })
             .collect();
@@ -235,42 +238,32 @@ pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
         let mut flattened_accounts = Vec::new();
         flatten_instruction_accounts(&instr.accounts, &mut flattened_accounts);
 
-        let account_params: Vec<_> = flattened_accounts
+        // Phase 2: Generate the fields for the ACCOUNTS struct
+        let account_struct_fields: Vec<_> = flattened_accounts
             .iter()
-            .filter(|account| account.address.is_none())
-            .map(|account| {
-                let account_name = Ident::new(&account.name, Span::call_site());
-
-                quote! { #account_name: solana_sdk::pubkey::Pubkey }
+            .map(|acc| {
+                let acc_name = Ident::new(&acc.name, Span::call_site());
+                quote! { pub #acc_name: solana_sdk::pubkey::Pubkey }
             })
             .collect();
 
+        // Phase 2: Generate the AccountMeta mapping inside the builder
         let account_metas: Vec<_> = flattened_accounts
             .iter()
-            .map(|account| {
-                let constructor = if account.writable {
+            .map(|acc| {
+                let constructor = if acc.writable {
                     quote! { solana_sdk::instruction::AccountMeta::new }
                 } else {
                     quote! { solana_sdk::instruction::AccountMeta::new_readonly }
                 };
-                let signer = account.signer;
-
-                if let Some(address) = &account.address {
-                    let address_lit = LitStr::new(address, Span::call_site());
-
-                    quote! {
-                        #constructor(solana_sdk::pubkey!(#address_lit), #signer)
-                    }
-                } else {
-                    let account_name = Ident::new(&account.name, Span::call_site());
-
-                    quote! {
-                        #constructor(#account_name, #signer)
-                    }
-                }
+                let signer = acc.signer;
+                let acc_name = Ident::new(&acc.name, Span::call_site());
+                // Phase 2: All AccountMeta keys come from the typed accounts struct.
+                quote! { #constructor(accounts.#acc_name, #signer) }
             })
             .collect();
 
+        // ... Keep your existing discriminator and arg_serializers logic here ...
         let discriminator = &instr.discriminator;
         let arg_serializers: Vec<_> = instr
             .args
@@ -281,14 +274,22 @@ pub fn generate_bevy_components(input: TokenStream) -> TokenStream {
             })
             .collect();
 
-        let instr_gen = quote! {
+        let instr_gen: TokenStream2 = quote! {
+            // The Component for the instruction data
             #[derive(bevy::prelude::Component, Debug, Clone, Default)]
             pub struct #name {
                 #( #fields, )*
             }
 
+            // Phase 2: The new Accounts Parameter Struct
+            #[derive(Debug, Clone, Copy)]
+            pub struct #accounts_struct_name {
+                #( #account_struct_fields, )*
+            }
+
+            // Phase 2: Updated builder signature
             pub fn #builder_name(
-                #( #account_params, )*
+                accounts: #accounts_struct_name,
                 #( #function_args ),*
             ) -> solana_sdk::instruction::Instruction {
                 let mut data = Vec::with_capacity(8);
