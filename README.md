@@ -50,6 +50,15 @@ cargo run -p bevy_game
 
 &nbsp;&nbsp;[x] First Initialize transaction execution.
 
-&nbsp;&nbsp;[&nbsp;] Rich IDL Type Support (Next: Vectors, Options, and Eums)
+&nbsp;&nbsp;[x] Rich IDL Type Support
 
-&nbsp;&nbsp;[&nbsp;] Account Deserializers (Next: Map on-chain state to Bevy Components)
+&nbsp;&nbsp;[x] Account Deserializers
+
+&nbsp;&nbsp;[&nbsp;] The Marker Component
+
+&nbsp;&nbsp;[&nbsp;] The Signer System
+
+&nbsp;&nbsp;[&nbsp;] The Submission System
+
+
+
